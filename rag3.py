@@ -12,6 +12,134 @@ import random
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from streamlit_js_eval import streamlit_js_eval
+from st_audiorec import st_audiorec
+import speech_recognition as sr
+import tempfile
+
+# ------------------------------------------------------
+# Spline FULLSCREEN BACKGROUND
+# ------------------------------------------------------
+st.markdown("""
+<style>
+.spline-bg {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    z-index: -10; /* behind everything */
+    pointer-events: none; /* allow clicking UI */
+}
+.spline-bg iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+}
+</style>
+
+<div class="spline-bg">
+    <iframe src="https://my.spline.design/squarechipsfallinginplace-zi64o2QlmNZGx75tCksuyCIF/"></iframe>
+</div>
+""", unsafe_allow_html=True)
+
+# ------------------------------------------------------
+# INIT (do this BEFORE CSS)
+# ------------------------------------------------------
+load_dotenv()
+st.set_page_config(
+    page_title="IoT Event AI Agent",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# ------------------------------------------------------
+# NOW add your CSS (AFTER set_page_config)
+# ------------------------------------------------------
+st.markdown("""
+<style>
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+/* GLOBAL */
+html, body {
+    background: linear-gradient(135deg, #0b0f19, #111827, #0f0c29) !important;
+    font-family: 'Inter', sans-serif !important;
+    color: #e5e7eb !important;
+}
+
+/* Streamlit Main Background */
+section.main, .block-container {
+    background: transparent !important;
+}
+
+/* SIDEBAR */
+section[data-testid="stSidebar"] {
+    background: rgba(17, 25, 40, 0.7) !important;
+    backdrop-filter: blur(15px) !important;
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+section[data-testid="stSidebar"] * {
+    color: #e2e8f0 !important;
+}
+
+/* HEADERS */
+h1, h2, h3 {
+    background: linear-gradient(90deg, #60a5fa, #a855f7);
+    -webkit-background-clip: text;
+    color: transparent !important;
+    font-weight: 700 !important;
+}
+
+/* INPUTS */
+input, textarea, select {
+    background: rgba(255, 255, 255, 0.07) !important;
+    color: white !important;
+    border: 1px solid rgba(255,255,255,0.18) !important;
+    border-radius: 10px !important;
+}
+
+/* FILE UPLOADER */
+div[data-testid="stFileUploader"] {
+    background: rgba(255,255,255,0.06) !important;
+    padding: 15px !important;
+    border-radius: 15px !important;
+    border: 1px solid rgba(255,255,255,0.12) !important;
+}
+
+/* BUTTONS */
+button {
+    background: linear-gradient(90deg, #2563eb, #7c3aed) !important;
+    border-radius: 12px !important;
+    color: white !important;
+    border: none !important;
+    font-weight: 600 !important;
+    padding: 0.6rem 1.4rem !important;
+}
+button:hover {
+    opacity: 0.9 !important;
+    transform: scale(1.03) !important;
+}
+
+/* METRIC BOXES */
+[data-testid="stMetric"] {
+    background: rgba(255,255,255,0.05) !important;
+    padding: 18px !important;
+    border-radius: 15px !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
+}
+
+/* CHART BACKGROUND */
+div[data-testid="stPlotlyChart"], .stPyplot {
+    background: rgba(17,25,40,0.45) !important;
+    padding: 18px !important;
+    border-radius: 16px !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
 
 # ------------------------------------------------------
 # INIT
@@ -24,21 +152,19 @@ st.set_page_config(
 )
 
 client = httpx.Client(verify=False)
-
 llm = ChatOpenAI(
     base_url=os.getenv("api_endpoint"),
     api_key=os.getenv("api_key"),
-    model="azure/genailab-maas-gpt-35-turbo",
+    model="kwaipilot/kat-coder-pro:free",
     http_client=client
 )
 
 embedding_model = OpenAIEmbeddings(
     base_url=os.getenv("api_endpoint"),
     api_key=os.getenv("api_key"),
-    model="azure/genailab-maas-text-embedding-3-large",
+    model="text-embedding-3-large",
     http_client=client
 )
-
 # ------------------------------------------------------
 # SIDEBAR
 # ------------------------------------------------------
@@ -124,32 +250,62 @@ if selected_page == "IoT Event Interpreter":
         return_source_documents=True
     )
 
-    st.subheader("Ask IoT Question")
-    query = st.text_input("Example: What causes packet loss in TempSensor_108?")
+    st.subheader("How May I Help You?")
 
-    if query:
-        with st.spinner("Thinking..."):
-            prompt = f"""
+# Text input field
+# query = st.text_input("Speak or type your question here")
+
+st.subheader("🎙️ Speak or Type Your Question")
+
+# --- AUDIO RECORDING ---
+wav_audio = st_audiorec()
+
+query = st.text_input("Type your question here")
+
+spoken_text = None
+
+if wav_audio is not None:
+    st.success("Voice captured! Converting to text...")
+
+    # Save temp file
+    with open("temp.wav", "wb") as f:
+        f.write(wav_audio)
+
+    recognizer = sr.Recognizer()
+    with sr.AudioFile("temp.wav") as source:
+        audio_data = recognizer.record(source)
+
+    try:
+        spoken_text = recognizer.recognize_google(audio_data)
+        st.write(f"### 🗣️ You said: **{spoken_text}**")
+        query = spoken_text   # <-- AUTO SEND TO AI
+    except Exception as e:
+        st.error(f"Voice recognition failed: {e}")
+
+# --- AUTO RUN AI ONCE query IS AVAILABLE ---
+if query:
+    with st.spinner("Thinking..."):
+        prompt = f"""
 Explain IoT event based on logs:
 
-1. Root cause analysis  
-2. Probability (%)  
+1. Root cause  
+2. Probability  
 3. Risk level  
 4. Recommended actions  
 5. Timeline summary  
 6. Health score  
-7. What to monitor next  
+7. What to monitor  
 
 User query: {query}
 """
-            result = rag.invoke(prompt)
+        result = rag.invoke(prompt)
 
-        st.write("### 📘 Explanation")
-        st.write(result["result"])
+    st.write("### 📘 Explanation")
+    st.write(result["result"])
 
-        st.write("### 📎 Context Used")
-        for doc in result["source_documents"]:
-            st.caption(doc.page_content[:500] + "...")
+    st.write("### 📎 Context Used")
+    for doc in result["source_documents"]:
+        st.caption(doc.page_content[:500] + "...")
 
 # ------------------------------------------------------
 # PAGE 2 — DASHBOARD WITH CHARTS
@@ -159,7 +315,7 @@ elif selected_page == "Dashboard":
     st.title("📊 IoT Analytics Dashboard")
 
     # Example data for charts
-    devices = ["Sensor A", "Sensor B", "Sensor C", "Sensor D"]
+    devices = ["Temp Sensor", "Pascal Sensor", "Proximity Sensor","Light Sensor"]
     rssi_values = np.random.randint(-90, -40, size=4)
     packet_loss = np.random.randint(0, 35, size=4)
 
@@ -176,7 +332,7 @@ elif selected_page == "Dashboard":
         ax.plot(rssi_series["Time"], rssi_series["RSSI"])
         ax.set_ylabel("RSSI (dBm)")
         ax.set_xlabel("Time")
-        ax.set_title("RSSI Trend Over Time")
+        ax.set_title("RSSI (Received Signal Strenth Indicator) Trend Over Time")
         st.pyplot(fig)
 
         # Packet Loss Bar Chart
@@ -259,12 +415,45 @@ elif selected_page == "Event Explanation":
 elif selected_page == "Device Status":
 
     st.title("📡 Device Status Viewer")
-    device = st.selectbox("Choose Device", ["Sensor A", "Sensor B", "Sensor C"])
+    device = st.selectbox("Choose Device", ["Temperature Sensor", "Pascal Sensor", "Proximity Sensor","Light Sensor"])
 
     metrics = simulate_device_metrics()
     st.metric("RSSI", f"{metrics['RSSI']} dBm")
     st.metric("Battery", f"{metrics['Battery']}%")
     st.metric("Packet Loss", f"{metrics['PacketLoss']}%")
+
+    # -----------------------------
+    # 🔍 Recommendation Engine
+    # -----------------------------
+    st.markdown("### ✅ Recommended Actions")
+
+    recommendations = []
+
+    # RSSI
+    if metrics["RSSI"] < -85:
+        recommendations.append("📡 **Weak signal detected** — Check gateway distance or obstacles. Consider repositioning the device.")
+    else:
+        recommendations.append("📶 Signal strength is good — no action needed.")
+
+    # Battery
+    if metrics["Battery"] < 15:
+        recommendations.append("🔋 **Low battery level** — Replace or recharge the battery soon.")
+    elif metrics["Battery"] < 40:
+        recommendations.append("🔋 Battery moderate — plan for replacement in coming days.")
+    else:
+        recommendations.append("🔋 Battery level is healthy.")
+
+    # Packet Loss
+    if metrics["PacketLoss"] > 25:
+        recommendations.append("📦 **High packet loss** — Check network congestion or interference. Review device connectivity.")
+    elif metrics["PacketLoss"] > 10:
+        recommendations.append("📦 Mild packet loss observed — monitor closely.")
+    else:
+        recommendations.append("📦 Packet loss is within normal range.")
+
+    # Display Recommendations
+    for rec in recommendations:
+        st.info(rec)
 
 # ------------------------------------------------------
 # PAGE 6 — Logs Viewer
